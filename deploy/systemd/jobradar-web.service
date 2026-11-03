@@ -1,0 +1,25 @@
+# /etc/systemd/system/jobradar-web.service — bare-metal deployment (audit NEW-05/NEW-17)
+[Unit]
+Description=JobRadar web (Next.js)
+After=network-online.target postgresql.service redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jobradar
+WorkingDirectory=/opt/jobradar
+EnvironmentFile=/opt/jobradar/.env
+Environment=NODE_ENV=production APP_NAME=web LOG_FORMAT=json PORT=3000 TRUSTED_PROXY=1
+ExecStartPre=/usr/bin/pnpm db:migrate:deploy
+ExecStart=/usr/bin/pnpm --filter @jobradar/web start
+Restart=always
+RestartSec=5
+# hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/jobradar/data /opt/jobradar/.next
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

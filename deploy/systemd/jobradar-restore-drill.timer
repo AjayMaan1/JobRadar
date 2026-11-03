@@ -1,0 +1,9 @@
+[Unit]
+Description=Weekly JobRadar restore drill (a backup that cannot be restored is not a backup)
+
+[Timer]
+OnCalendar=Sun *-*-* 04:30:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,964 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Job {
+  id                   String          @id @default(uuid())
+  title                String
+  company              String
+  sourceName           String          @map("source_name")
+  sourceType           String?         @map("source_type")
+  sourceUrl            String?         @map("source_url")
+  applyUrl             String?         @map("apply_url")
+  applyUrlNormalized   String?         @map("apply_url_normalized")   // tracking-stripped, lowercased (dedupe identity)
+  country              String?
+  region               String?
+  city                 String?
+  remoteType           String          @default("unknown") @map("remote_type")
+  eligibility          String          @default("unknown")
+  eligibilityConfidence Float?          @map("eligibility_confidence")
+  eligibilityEvidence  String?         @map("eligibility_evidence")
+  salaryMin            Float?          @map("salary_min")
+  salaryMax            Float?          @map("salary_max")
+  salaryCurrency       String?         @map("salary_currency")
+  salaryPeriod         String?         @map("salary_period")
+  salaryConfidence     Float?          @map("salary_confidence")
+  salaryInrMin         Float?          @map("salary_inr_min")
+  salaryInrMax         Float?          @map("salary_inr_max")
+  salaryUsdMin         Float?          @map("salary_usd_min")   // USD pivot (dynamic preferences); INR kept for compatibility
+  salaryUsdMax         Float?          @map("salary_usd_max")
+  experienceMin        Float?          @map("experience_min")
+  experienceMax        Float?          @map("experience_max")
+  seniority            String?
+  category             String?
+  skills               String
+  description          String?                                      // crawler/hydrator-owned text
+  // Audit NEW-03: a user-pasted description never overwrites the crawled one. Used only when `description`
+  // is too short to analyse; provenance is kept so the UI can say who pasted it.
+  descriptionManual    String?         @map("description_manual")
+  descriptionManualBy  String?         @map("description_manual_by")
+  descriptionManualAt  DateTime?       @map("description_manual_at")
+  /// Audit NEW-09: generated tsvector over title + description (migration-defined, GENERATED ALWAYS … STORED).
+  searchTsv            Unsupported("tsvector")? @map("search_tsv")
+  postedAt             DateTime?       @map("posted_at")
+  discoveredAt         DateTime        @default(now()) @map("discovered_at")
+  expiresAt            DateTime?       @map("expires_at")
+  sourceFingerprint    String?         @map("source_fingerprint")
+  canonicalHash        String          @unique @map("canonical_hash")
+  rankingScore         Float           @default(0) @map("ranking_score")
+  baseScore            Float           @default(0) @map("base_score")
+  status               String          @default("new")
+  notes                String?
+
+  // v2 additions
+  companyId            String?          @map("company_id")
+  employmentType       EmploymentType   @default(unknown) @map("employment_type")
+  opportunityClass     OpportunityClass @default(none) @map("opportunity_class")
+  classReason          String?          @map("class_reason")
+  firstSeenAt          DateTime         @default(now()) @map("first_seen_at")
+  lastSeenAt           DateTime         @default(now()) @map("last_seen_at")
+  closedAt             DateTime?        @map("closed_at")
+  livenessCheckedAt    DateTime?        @map("liveness_checked_at")
+  updatedAt            DateTime         @default(now()) @updatedAt @map("updated_at")
+
+  applications  Application[]
+  notifications Notification[]
+  sightings     JobSighting[]
+  payEvidence   PayEvidence[]
+  companyRef    Company?        @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  requirements  JobRequirements?
+  resumeVersions ResumeVersion[]
+  atsReports    AtsReport[]
+  userStates    JobUserState[]
+  fits          JobFit[]
+  facts         JobFacts?
+  evals         JobUserEval[]
+
+  @@index([canonicalHash])
+  @@index([status])
+  @@index([rankingScore])
+  @@index([postedAt])
+  @@index([discoveredAt])
+  @@index([opportunityClass, status, firstSeenAt(sort: Desc)])
+  @@index([companyId])
+  @@index([closedAt])
+  @@index([applyUrlNormalized])
+  @@index([searchTsv], type: Gin)
+  @@index([title(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@index([company(ops: raw("gin_trgm_ops"))], type: Gin)
+  @@map("jobs")
+}
+
+model Source {
+  id                   String          @id @default(uuid())
+  name                 String
+  domain               String          @unique
+  sourceType           String?         @map("source_type")
+  region               String?
+  country              String?
+  ingestionMethod      String          @map("ingestion_method")
+  apiUrl               String?         @map("api_url")
+  careersUrl           String?         @map("careers_url")
+  companyId            String?         @map("company_id")
+  atsType              String?         @map("ats_type")
+  qualityScore         Float           @default(50) @map("quality_score")
+  refreshIntervalHours Int             @default(8) @map("refresh_interval_hours")
+  lastCrawledAt        DateTime?       @map("last_crawled_at")
+  failureCount         Int             @default(0) @map("failure_count")
+  enabled              Boolean         @default(true)
+  notes                String?
+  etag                 String?
+  lastModified         String?         @map("last_modified")
+  bodyHash             String?         @map("body_hash")
+  backoffUntil         DateTime?       @map("backoff_until")
+  availabilityIssue    String?         @map("availability_issue")
+
+  sightings JobSighting[]
+
+  @@index([enabled])
+  @@map("sources")
+}
+
+model Recruiter {
+  id             String   @id @default(uuid())
+  name           String?
+  agency         String?
+  country        String?
+  region         String?
+  specialization String?
+  linkedinUrl    String?  @map("linkedin_url")
+  websiteUrl     String?  @map("website_url")
+  email          String?
+  sourceUrl      String?  @map("source_url")
+  confidence     Float?
+  notes          String?
+  lastSeenAt     DateTime? @map("last_seen_at")
+
+  @@map("recruiters")
+}
+
+model Application {
+  id                  String    @id @default(uuid())
+  jobId               String    @map("job_id")
+  userId              String?   @map("user_id")              // nullable only for pre-v3 rows; backfilled by migration
+  status              String    @default("applied")          // applied | interviewing | offer | rejected | withdrawn
+  appliedAt           DateTime? @map("applied_at")
+  followUpAt          DateTime? @map("follow_up_at")
+  resumeVersion       String?   @map("resume_version")       // legacy free text
+  coverLetterVersion  String?   @map("cover_letter_version") // legacy free text
+  notes               String?
+
+  // v3 Apply Kit: exactly what was sent (V4)
+  resumeVersionId     String?   @map("resume_version_id")
+  headlineUsed        String?   @map("headline_used")
+  aboutUsed           String?   @map("about_used")
+  coverNote           String?   @map("cover_note")
+  answers             Json?                                  // [{ question, answer }]
+  submittedVia        String    @default("manual") @map("submitted_via") // manual | extension
+  events              Json      @default("[]")               // [{ at, type, note }] timeline
+
+  job           Job            @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  user          User?          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  resumeVersionRef ResumeVersion? @relation(fields: [resumeVersionId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, jobId])
+  @@index([jobId])
+  @@map("applications")
+}
+
+/// Per-user job state (saved / rejected / applied). jobs.status is lifecycle only (new | closed) — V10.
+model JobUserState {
+  userId     String   @map("user_id")
+  jobId      String   @map("job_id")
+  state      String                                          // saved | rejected | applied
+  matchScore Int?     @map("match_score")                    // last ats-v1 score for this user+job (denormalised for sorting)
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@id([userId, jobId])
+  @@index([userId, state])
+  @@map("job_user_states")
+}
+
+model Notification {
+  id               String    @id @default(uuid())
+  jobId            String?   @map("job_id")
+  channel          String
+  notificationType String    @map("notification_type")
+  recipient        String?
+  score            Float?
+  payload          String?
+  sentAt           DateTime? @map("sent_at")
+  status           String    @default("pending")
+  error            String?
+  canonicalHash    String?   @map("canonical_hash")
+
+  job Job? @relation(fields: [jobId], references: [id])
+
+  @@index([canonicalHash, channel, notificationType])
+  @@index([canonicalHash, channel, recipient])
+  @@index([sentAt])
+  @@map("notifications")
+}
+
+// ═══════════════════════════ v2: watchlist / discovery engine ═══════════════════════════
+
+enum AtsType {
+  greenhouse
+  lever
+  ashby
+  workable
+  smartrecruiters
+  recruitee
+  teamtailor
+  personio
+  bamboohr
+  rippling
+  workday          // expensive: POST per tenant, capped tier
+  custom_json      // hand-written JSON adapter (e.g. big-tech careers APIs)
+  rss
+  html             // last resort, Playwright/cheerio, never faster than "cold"
+}
+
+enum AtsCostClass {
+  cheap            // GET JSON, ETag-friendly, <50KB       (greenhouse, lever, ashby, workable…)
+  medium           // GET JSON but paginated / no ETag     (smartrecruiters, recruitee, teamtailor)
+  expensive        // POST / multi-request / browser       (workday, html, some custom_json)
+}
+
+enum CompanyStatus {
+  discovered       // seen somewhere, not yet resolved to a board
+  resolving        // resolver is trying to find an ATS board
+  unresolved       // no pollable board found; retry monthly
+  probing          // board found, first qualification fetch pending
+  watched          // qualified; polled per tier
+  dormant          // fails a hard gate (no eligibility / below pay floor); re-probed weekly
+  retired          // board gone >30d or zero eligible roles >12m
+  blocked          // anti-bot / repeated 403; operator must review
+}
+
+enum PollTier {
+  hot              // eligible + pay >= floor + >=2 postings/30d
+  warm             // eligible + any activity in 90d
+  cold             // eligible, quiet
+  dormant          // weekly re-check only
+}
+
+enum BoardStatus {
+  active
+  failing          // consecutive failures, backing off
+  blocked          // challenge page / 403 pattern detected
+  gone             // 404 / empty board for >30d
+  disabled         // manual kill switch
+}
+
+enum DiscoverySource {
+  aggregator_apply_url   // apply URL on a crawled job pointed at an ATS
+  hn_who_is_hiring
+  github_list
+  yc_directory
+  himalayas_companies
+  common_crawl
+  funding_feed
+  leetcode_comp
+  reddit
+  lca_dataset
+  manual
+}
+
+enum ResolutionStatus {
+  pending
+  resolved
+  no_ats
+  rejected               // e.g. staffing agency, duplicate, not a company
+}
+
+enum PayEvidenceSource {
+  own_posting            // salary parsed from the company's own job posting
+  hn_post
+  leetcode_comp
+  lca_dataset            // US DOL H-1B LCA disclosure (proxy, not India)
+  levels_manual
+  manual
+}
+
+enum PayBandStatus {
+  unknown
+  above_floor
+  below_floor
+}
+
+enum FetchOutcome {
+  unchanged              // 304 or identical body hash
+  changed
+  error
+  rate_limited           // 429
+  blocked                // 403 / challenge page
+  timeout
+}
+
+enum CircuitState {
+  closed
+  open
+  half_open
+}
+
+enum OpportunityClass {
+  p1_global_remote   // non-IN HQ, remote, no restriction excluding India
+  p2_india_remote    // non-IN HQ, remote, location explicitly India
+  p3_ncr_hybrid      // non-IN HQ MNC, hybrid/onsite in Delhi NCR
+  none
+}
+
+enum EmploymentType {
+  full_time
+  contract
+  part_time
+  internship
+  unknown
+}
+
+// ── Canonical company ───────────────────────────────────────────────────────
+model Company {
+  id              String        @id @default(uuid())
+  name            String
+  normalizedName  String        @map("normalized_name")          // lowercase, stripped of inc/ltd/etc.
+  domain          String?       @unique                          // primary website host, used for matching
+  hqCountry       String?       @map("hq_country")               // ISO-3166 alpha-2
+  fundingStage    String?       @map("funding_stage")            // seed, series_a, …, public
+  fundingLastAt   DateTime?     @map("funding_last_at")
+  employeeRange   String?       @map("employee_range")           // "11-50", "51-200"…
+  tags            String[]      @default([])                     // yc, a16z, remote_first, ai, …
+
+  // Eligibility (for the configured user country, default IN)
+  remotePolicy            String?   @map("remote_policy")        // remote_first | remote_friendly | hybrid | onsite | unknown
+  hiresIn                 String[]  @default([]) @map("hires_in") // country codes + region tokens: IN, APAC, EMEA, WORLDWIDE
+  eligibilityConfidence   Float     @default(0) @map("eligibility_confidence")
+  eligibilityEvidence     Json?     @map("eligibility_evidence")  // [{jobId, phrase, seenAt}]
+  eligibilityLastSeenAt   DateTime? @map("eligibility_last_seen_at")
+
+  // Activity (derived from job_sightings, recomputed hourly)
+  engineeringShare  Float     @default(0) @map("engineering_share")   // 0..1
+  postingRate30d    Float     @default(0) @map("posting_rate_30d")    // new eng postings / 30d
+  activePostings    Int       @default(0) @map("active_postings")
+  lastPostingAt     DateTime? @map("last_posting_at")
+
+  // Pay band (derived from pay_evidence, INR annual)
+  payMinInr         Float?        @map("pay_min_inr")
+  payMaxInr         Float?        @map("pay_max_inr")
+  payMedianInr      Float?        @map("pay_median_inr")
+  payConfidence     Float         @default(0) @map("pay_confidence")   // 0..1, f(count, recency, source quality)
+  payEvidenceCount  Int           @default(0) @map("pay_evidence_count")
+  payLastAt         DateTime?     @map("pay_last_at")
+  payBandStatus     PayBandStatus @default(unknown) @map("pay_band_status")
+
+  // Priority-class aggregates (derived, 180d window)
+  bestClass        OpportunityClass @default(none) @map("best_class")
+  classCounts180d  Json?            @map("class_counts_180d")   // {"p1_global_remote": 3, "p2_india_remote": 1, ...}
+  offices          String[]         @default([])                // normalized cities seen in postings (drives NCR gate)
+  anchor           Boolean          @default(false)             // curated; exempt from activity-based demotion
+
+  // Lifecycle & scheduling
+  status          CompanyStatus @default(discovered)
+  statusReason    String?       @map("status_reason")
+  tier            PollTier      @default(cold)
+  tierReason      String?       @map("tier_reason")
+  tierUpdatedAt   DateTime?     @map("tier_updated_at")
+  manualTier      PollTier?     @map("manual_tier")               // operator override, wins over computed tier
+  qualityScore    Float         @default(0) @map("quality_score") // composite 0..100 for ranking/source-quality
+
+  discoveredAt      DateTime  @default(now()) @map("discovered_at")
+  discoveredVia     DiscoverySource @map("discovered_via")
+  firstQualifiedAt  DateTime? @map("first_qualified_at")
+  lastProbedAt      DateTime? @map("last_probed_at")
+  notes             String?
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  boards       CompanyBoard[]
+  discoveries  CompanyDiscovery[]
+  payEvidence  PayEvidence[]
+  jobs         Job[]
+
+  @@index([normalizedName])
+  @@index([status, tier])
+  @@index([payBandStatus])
+  @@index([hiresIn], type: Gin)
+  @@index([anchor])
+  @@index([bestClass])
+  @@map("companies")
+}
+
+// ── A pollable board (a company may have several: GH for US, Lever for EU…) ──
+model CompanyBoard {
+  id          String       @id @default(uuid())
+  companyId   String       @map("company_id")
+  atsType     AtsType      @map("ats_type")
+  slug        String                                              // "stripe", or "nvidia/NVIDIAExternalCareerSite" for workday
+  host        String                                              // rate-limit key: boards-api.greenhouse.io, nvidia.wd5.myworkdayjobs.com
+  apiUrl      String       @map("api_url")                        // fully resolved list endpoint
+  careersUrl  String?      @map("careers_url")
+  costClass   AtsCostClass @map("cost_class")
+  queryScope  Json?        @map("query_scope")                    // e.g. workday {searchText:"Gurugram"}; lever {location:"Remote"}
+
+  status               BoardStatus @default(active)
+  enabled              Boolean     @default(true)
+
+  // Scheduling (dispatcher: WHERE enabled AND status='active' AND next_poll_at <= now())
+  nextPollAt           DateTime    @default(now()) @map("next_poll_at")
+  lastPollAt           DateTime?   @map("last_poll_at")
+  lastSuccessAt        DateTime?   @map("last_success_at")
+  lastChangedAt        DateTime?   @map("last_changed_at")
+  backoffUntil         DateTime?   @map("backoff_until")
+
+  // Conditional-request state
+  etag                 String?
+  lastModified         String?     @map("last_modified")
+  bodyHash             String?     @map("body_hash")
+
+  // Health
+  consecutiveFailures  Int         @default(0) @map("consecutive_failures")
+  consecutiveUnchanged Int         @default(0) @map("consecutive_unchanged")
+  blockedCount7d       Int         @default(0) @map("blocked_count_7d")
+  lastStatusCode       Int?        @map("last_status_code")
+  lastError            String?     @map("last_error")
+  lastPostingCount     Int         @default(0) @map("last_posting_count")
+  suspectDropAt        DateTime?   @map("suspect_drop_at")        // >50% count drop guard; no closures until confirmed
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  company    Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sightings  JobSighting[]
+  fetchRuns  FetchRun[]
+
+  @@unique([atsType, slug])
+  @@index([enabled, status, nextPollAt])
+  @@index([host])
+  @@map("company_boards")
+}
+
+// ── Where/when a company was seen. Feeds the resolver; dedupes discovery. ───
+model CompanyDiscovery {
+  id               String           @id @default(uuid())
+  companyId        String?          @map("company_id")             // null until resolved
+  source           DiscoverySource
+  externalRef      String           @map("external_ref")           // URL / slug / HN comment id / GitHub row
+  nameAsSeen       String?          @map("name_as_seen")
+  domainAsSeen     String?          @map("domain_as_seen")
+  careersUrlAsSeen String?          @map("careers_url_as_seen")
+  atsHint          AtsType?         @map("ats_hint")
+  slugHint         String?          @map("slug_hint")
+  payload          Json?                                           // raw snippet for audit
+  firstSeenAt      DateTime         @default(now()) @map("first_seen_at")
+  lastSeenAt       DateTime         @default(now()) @map("last_seen_at")
+  seenCount        Int              @default(1) @map("seen_count")
+  resolution       ResolutionStatus @default(pending)
+  resolvedAt       DateTime?        @map("resolved_at")
+  resolutionNote   String?          @map("resolution_note")
+
+  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  @@unique([source, externalRef])
+  @@index([resolution, firstSeenAt])
+  @@index([companyId])
+  @@map("company_discoveries")
+}
+
+// ── Pay data points; company.pay_* is derived from these ────────────────────
+model PayEvidence {
+  id            String            @id @default(uuid())
+  companyId     String            @map("company_id")
+  source        PayEvidenceSource
+  jobId         String?           @map("job_id")
+  roleTitle     String?           @map("role_title")
+  level         String?                                            // junior/mid/senior/staff…
+  locationText  String?           @map("location_text")
+  country       String?                                            // ISO code if known
+  minAmount     Float?            @map("min_amount")
+  maxAmount     Float?            @map("max_amount")
+  currency      String?
+  period        String?                                            // year | month | hour
+  inrAnnualMin  Float?            @map("inr_annual_min")
+  inrAnnualMax  Float?            @map("inr_annual_max")
+  confidence    Float             @default(0.5)
+  observedAt    DateTime          @map("observed_at")
+  url           String?
+  rawSnippet    String?           @map("raw_snippet")
+  createdAt     DateTime          @default(now()) @map("created_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  job     Job?    @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([companyId, observedAt])
+  @@index([source])
+  @@map("pay_evidence")
+}
+
+// ── Per-feed sighting of a job. "New" == this row did not exist. ────────────
+// feedKey = "board:<boardId>" | "source:<sourceId>" so both ATS boards and the
+// existing aggregator Source rows share one table.
+model JobSighting {
+  id            String    @id @default(uuid())
+  feedKey       String    @map("feed_key")
+  boardId       String?   @map("board_id")
+  sourceId      String?   @map("source_id")
+  externalId    String    @map("external_id")                       // ATS job id or normalized URL
+  jobId         String?   @map("job_id")                            // canonical job after dedupe
+  payloadHash   String    @map("payload_hash")                      // hash of the list-level fields
+  firstSeenAt   DateTime  @default(now()) @map("first_seen_at")
+  lastSeenAt    DateTime  @default(now()) @map("last_seen_at")
+  missingCount  Int       @default(0) @map("missing_count")          // consecutive successful polls without this id
+  goneAt        DateTime? @map("gone_at")                           // set when missing_count >= 2
+  postedAtSrc   DateTime? @map("posted_at_src")                     // as reported by the feed
+  detailFetchedAt DateTime? @map("detail_fetched_at")
+
+  board  CompanyBoard? @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  source Source?       @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  job    Job?          @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@unique([feedKey, externalId])
+  @@index([jobId])
+  @@index([firstSeenAt])
+  @@index([boardId, goneAt])
+  @@index([goneAt])                                                  // retention: delete where gone_at < now() - 365d
+  @@map("job_sightings")
+}
+
+// ── Every outbound list fetch; drives health, metrics, and circuit breakers ─
+model FetchRun {
+  id           String       @id @default(uuid())
+  boardId      String?      @map("board_id")
+  sourceId     String?      @map("source_id")
+  host         String
+  startedAt    DateTime     @default(now()) @map("started_at")
+  durationMs   Int?         @map("duration_ms")
+  httpStatus   Int?         @map("http_status")
+  bytes        Int?
+  outcome      FetchOutcome
+  newCount     Int          @default(0) @map("new_count")
+  changedCount Int          @default(0) @map("changed_count")
+  goneCount    Int          @default(0) @map("gone_count")
+  errorClass   String?      @map("error_class")
+  errorMessage String?      @map("error_message")
+
+  board CompanyBoard? @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@index([boardId, startedAt])
+  @@index([host, startedAt])
+  @@index([outcome, startedAt])
+  @@map("fetch_runs")          // prune rows older than 30d
+}
+
+// ── Per-host politeness config. Runtime counters/token buckets live in Redis. ─
+model HostPolicy {
+  id               String       @id @default(uuid())
+  host             String       @unique                              // exact host, or "*.myworkdayjobs.com"
+  enabled          Boolean      @default(true)                       // kill switch
+  maxConcurrency   Int          @default(2) @map("max_concurrency")
+  minIntervalMs    Int          @default(1000) @map("min_interval_ms")
+  burst            Int          @default(3)
+  dailyBudget      Int          @default(20000) @map("daily_budget") // hard cap on requests/day
+  probeBudgetPerDay Int         @default(300) @map("probe_budget_per_day") // new-board first fetches/day
+  respectRobots    Boolean      @default(true) @map("respect_robots")
+  circuitState     CircuitState @default(closed) @map("circuit_state")
+  circuitOpenUntil DateTime?    @map("circuit_open_until")
+  circuitOpenedAt  DateTime?    @map("circuit_opened_at")
+  tripCount7d      Int          @default(0) @map("trip_count_7d")
+  notes            String?
+  updatedAt        DateTime     @updatedAt @map("updated_at")
+
+  @@map("host_policies")
+}
+
+
+// ═══════════════════════════ v3: users, resumes, match scoring ═══════════════════════════
+// Design: audit/HLD-apply-portal-v3.md. All rows are user-scoped (V9); resume versions are immutable (V4).
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  name         String?
+  role         String    @default("user")                 // user | admin (operator routes)
+  passwordHash String?   @map("password_hash")            // scrypt; null = cannot log in with a password
+  createdAt    DateTime  @default(now()) @map("created_at")
+  lastLoginAt  DateTime? @map("last_login_at")
+  emailVerifiedAt DateTime? @map("email_verified_at")     // null = unverified (self sign-up with SIGNUP_REQUIRE_VERIFICATION)
+
+  profile      CandidateProfile?
+  resumes      Resume[]
+  sessions     Session[]
+  jobStates    JobUserState[]
+  applications Application[]
+  fits         JobFit[]
+  authTokens   AuthToken[]
+  alertChannels AlertChannel[]
+  preferences  UserPreferences?
+  presets      PreferencePreset[]
+  prefHistory  PreferenceHistory[]
+  evals        JobUserEval[]
+
+  @@map("users")
+}
+
+/// Server-side sessions (C1). The cookie carries a random token; only its SHA-256 is stored.
+model Session {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  tokenHash String   @unique @map("token_hash")
+  userAgent String?  @map("user_agent")
+  ip        String?
+  createdAt DateTime @default(now()) @map("created_at")
+  expiresAt DateTime @map("expires_at")
+  lastSeenAt DateTime @default(now()) @map("last_seen_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// Single-use tokens (audit NEW-07): password reset, e-mail verification, browser-extension pairing.
+/// Only the SHA-256 of the token is stored.
+model AuthToken {
+  id        String    @id @default(uuid())
+  userId    String    @map("user_id")
+  kind      String                                   // password_reset | email_verify | extension
+  tokenHash String    @unique @map("token_hash")
+  expiresAt DateTime  @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, kind])
+  @@map("auth_tokens")
+}
+
+/// Per-user alert delivery (audit NEW-03 / GH-6). When no rows exist, the TELEGRAM_*/EMAIL_* env vars act as
+/// the owner's implicit channel (single-user behaviour unchanged).
+model AlertChannel {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  kind      String                                   // telegram | email
+  address   String                                   // chat id or e-mail address
+  classes   String[] @default(["p1_global_remote", "p2_india_remote"])
+  minScore  Int      @default(0) @map("min_score")
+  instant   Boolean  @default(true)
+  digest    Boolean  @default(true)
+  enabled   Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, kind, address])
+  @@index([enabled])
+  @@map("alert_channels")
+}
+
+/// Candidate preferences. Seeded from the master resume; user-editable. Replaces hard-coded RANKING_CONFIG
+/// for role fit. headline/about are the MASTER texts and are never modified by tailoring (V1).
+model CandidateProfile {
+  userId          String   @id @map("user_id")
+  headline        String?
+  about           String?
+  targetTitles    String[] @default([]) @map("target_titles")
+  skills          Json     @default("[]")                 // [{ name, canonical, confirmed: true }]
+  yearsExperience Float?   @map("years_experience")
+  payFloorInr     Float?   @map("pay_floor_inr")
+  confirmedFacts  Json     @default("[]") @map("confirmed_facts") // user-confirmed facts → grounding source (V2)
+  applyDefaults   Json     @default("{}") @map("apply_defaults")   // { noticePeriod, currentLocation, workAuthorization, salaryExpectation, linkedin, portfolio }
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @default(now()) @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("candidate_profiles")
+}
+
+/// An uploaded resume document. The structured content lives in resume_versions.
+model Resume {
+  id               String   @id @default(uuid())
+  userId           String   @map("user_id")
+  label            String
+  isMaster         Boolean  @default(false) @map("is_master")
+  sourceFileKey    String?  @map("source_file_key")         // object-store key of the original upload
+  sourceMime       String?  @map("source_mime")
+  sourceFilename   String?  @map("source_filename")
+  parseStatus      String   @default("pending") @map("parse_status") // pending | parsing | parsed | needs_review | failed
+  parseError       String?  @map("parse_error")
+  parseWarnings    Json     @default("[]") @map("parse_warnings")    // [{ code, severity, message }]
+  rawText          String?  @map("raw_text")                // extracted text (for side-by-side review)
+  currentVersionId String?  @map("current_version_id")      // latest master/corrected version
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at")
+
+  user     User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  versions ResumeVersion[]
+
+  @@index([userId])
+  @@map("resumes")
+}
+
+/// Immutable. content = JSON Resume (packages/resume/src/schema). A version with parent_id = null is the
+/// original parse; user corrections and tailored outputs are children. Never UPDATE content.
+model ResumeVersion {
+  id               String   @id @default(uuid())
+  resumeId         String   @map("resume_id")
+  parentId         String?  @map("parent_id")
+  jobId            String?  @map("job_id")                  // set when tailored for a job
+  kind             String   @default("master")              // master | correction | tailored
+  content          Json
+  contentHash      String   @map("content_hash")
+  template         String   @default("ats-classic")
+  pdfKey           String?  @map("pdf_key")
+  docxKey          String?  @map("docx_key")
+  renderStatus     String   @default("none") @map("render_status") // none | pending | rendered | failed
+  tailoredHeadline Boolean  @default(false) @map("tailored_headline")
+  tailoredAbout    Boolean  @default(false) @map("tailored_about")
+  changeLog        Json?    @map("change_log")
+  renderError      String?  @map("render_error")
+  renderWarnings   Json?    @map("render_warnings")          // parseability of the rendered PDF (post-render verification)
+  renderedAt       DateTime? @map("rendered_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  applications Application[]
+  resume   Resume          @relation(fields: [resumeId], references: [id], onDelete: Cascade)
+  parent   ResumeVersion?  @relation("ResumeVersionLineage", fields: [parentId], references: [id], onDelete: SetNull)
+  children ResumeVersion[] @relation("ResumeVersionLineage")
+  job      Job?            @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  reports  AtsReport[]
+
+  @@index([resumeId, createdAt])
+  @@index([jobId])
+  @@map("resume_versions")
+}
+
+/// Per-job structured requirements, shared across users. Recomputed when description_hash or
+/// extractor_version changes. Also the source of jobs.skills for board jobs.
+model JobRequirements {
+  jobId                String   @id @map("job_id")
+  descriptionHash      String   @map("description_hash")
+  extractorVersion     String   @map("extractor_version")
+  descriptionSource    String   @default("crawl") @map("description_source") // crawl | hydrated | manual
+  titleNormalized      String?  @map("title_normalized")
+  seniority            String?
+  yearsMin             Float?   @map("years_min")
+  required             Json     @default("[]")              // [{ skill, weight, evidence }]
+  preferred            Json     @default("[]")
+  keywords             Json     @default("[]")              // [{ term, weight }]
+  applicationQuestions Json?    @map("application_questions")
+  llmUsed              Boolean  @default(false) @map("llm_used")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @default(now()) @updatedAt @map("updated_at")
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("job_requirements")
+}
+
+/// Deterministic match score of one resume version against one job (scorer_version pins the algorithm).
+model AtsReport {
+  id              String   @id @default(uuid())
+  resumeVersionId String   @map("resume_version_id")
+  jobId           String   @map("job_id")
+  scorerVersion   String   @map("scorer_version")
+  score           Int
+  breakdown       Json                                      // components + matched/missing with evidence
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  resumeVersion ResumeVersion @relation(fields: [resumeVersionId], references: [id], onDelete: Cascade)
+  job           Job           @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  suggestions   Suggestion[]
+
+  @@unique([resumeVersionId, jobId, scorerVersion])
+  @@index([jobId])
+  @@map("ats_reports")
+}
+
+enum SuggestionKind {
+  keyword_confirm   // "The JD requires X — have you used it?" (never inserts silently)
+  bullet_rewrite    // rephrase an existing bullet to surface evidenced skills / metrics
+  reorder           // move the most relevant bullets/roles first
+  skills_section    // add skills that are evidenced in experience but missing from the skills list
+  formatting        // parseability advice (no text change)
+  headline          // opt-in per application (C8)
+  about             // opt-in per application (C8)
+  answer            // drafted application answer (C10)
+  cover_letter      // drafted cover note (GH-8)
+}
+
+enum SuggestionStatus {
+  pending
+  accepted
+  rejected
+  edited
+  answered          // keyword_confirm resolved
+}
+
+/// One proposed change. `after` never reaches a version unless accepted/edited by the user (V1), and the
+/// grounding validator marks anything unsupported by the master resume or confirmed facts as flagged (V2).
+model Suggestion {
+  id           String           @id @default(uuid())
+  reportId     String           @map("report_id")
+  kind         SuggestionKind
+  targetPath   String?          @map("target_path")   // JSON pointer into content, e.g. /work/0/highlights/2
+  before       String?
+  after        String?
+  rationale    String
+  jdEvidence   String?          @map("jd_evidence")
+  skill        String?                                // keyword_confirm: the skill in question
+  grounding    Json?                                  // validator output: { ok, unsupported: [...] }
+  flagged      Boolean          @default(false)
+  expectedGain Int?             @map("expected_gain")
+  status       SuggestionStatus @default(pending)
+  userEdit     String?          @map("user_edit")
+  answer       Json?                                  // keyword_confirm: { yes: boolean, context }
+  variant      String?                                // headline/about: conservative | balanced | assertive
+  question     String?                                // answer: the ATS question text
+  createdAt    DateTime         @default(now()) @map("created_at")
+  updatedAt    DateTime         @default(now()) @updatedAt @map("updated_at")
+
+  report AtsReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@index([reportId, status])
+  @@map("suggestions")
+}
+
+// ═══════════════════════════ v3c: semantic layer (C13) ═══════════════════════════
+// Vectors live in plain Postgres as bytea (Float32, L2-normalised). At this deployment's scale (thousands to
+// low tens of thousands of jobs) brute-force cosine in-process beats maintaining pgvector on a 2-core box;
+// swap to pgvector when the job count passes ~50k.
+
+model Embedding {
+  id        String   @id @default(uuid())
+  ownerType String   @map("owner_type")        // job | resume_version | profile | requirement | query
+  ownerId   String   @map("owner_id")
+  chunkKey  String   @map("chunk_key")         // e.g. "summary", "desc:2", "work/0/highlights/3", "req:Kafka"
+  text      String                              // the embedded chunk (for evidence display); ≤ 2k chars
+  textHash  String   @map("text_hash")
+  model     String
+  dims      Int
+  vector    Bytes                               // Float32Array bytes, normalised
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") // audit NEW-08: the in-process index pages on this
+
+  @@unique([ownerType, ownerId, chunkKey, model])
+  @@index([ownerType, ownerId])
+  @@index([ownerType, createdAt])
+  @@index([ownerType, updatedAt])
+  @@map("embeddings")
+}
+
+/// Per-user semantic fit for a job (fit-v1), computed in the worker when a job is enriched or a profile
+/// changes. Separate from job_user_states so it never implies a user action.
+model JobFit {
+  userId       String   @map("user_id")
+  jobId        String   @map("job_id")
+  fitScore     Int      @map("fit_score")        // 0..100 cosine-based semantic fit
+  keywordScore Int?     @map("keyword_score")    // quick keyword match at compute time
+  topMatches   Json?    @map("top_matches")      // [{ chunk, similarity }] for the why-line
+  model        String
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@id([userId, jobId])
+  @@index([userId, fitScore(sort: Desc)])
+  @@map("job_fits")
+}
+
+// ═══════════════════════════ v5: dynamic preferences (docs/HLD-dynamic-preferences.md) ═══════════════════════════
+
+/// Global, user-independent facts extracted once per job (work mode, normalised locations, geo constraints,
+/// salary with USD pivot, company). The per-user evaluator reads this, never the raw description.
+model JobFacts {
+  jobId     String   @id @map("job_id")
+  facts     Json
+  version   String                                     // facts extractor version
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at")
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("job_facts")
+}
+
+/// The user's active preference document (validated by @jobradar/prefs PreferencesSchema).
+model UserPreferences {
+  userId        String   @id @map("user_id")
+  doc           Json
+  schemaVersion Int      @default(1) @map("schema_version")
+  source        String   @default("preset")            // manual | wizard | preset | seed
+  version       Int      @default(1)                   // bumped on every save; evals record which version they used
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_preferences")
+}
+
+/// Named preference documents: system presets (owner_user_id null) and private user presets.
+model PreferencePreset {
+  id            String   @id @default(uuid())
+  ownerUserId   String?  @map("owner_user_id")
+  name          String
+  description   String?
+  doc           Json
+  schemaVersion Int      @default(1) @map("schema_version")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  owner User? @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+
+  @@unique([ownerUserId, name])
+  @@map("preference_presets")
+}
+
+/// Append-only snapshots of every saved version (revert target; which doc evaluated a job).
+model PreferenceHistory {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  version   Int
+  doc       Json
+  source    String
+  note      String?
+  changedAt DateTime @default(now()) @map("changed_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, version])
+  @@map("preference_history")
+}
+
+/// evaluate(facts, prefs) per (user, job): what the feed, alerts and digest read instead of jobs.opportunity_class.
+model JobUserEval {
+  userId           String   @map("user_id")
+  jobId            String   @map("job_id")
+  tier             String                              // tier id from the user's doc, or 'none'
+  eligible         Boolean
+  score            Int
+  reasons          Json                                // string[] for the "why it's in your feed" line
+  components       Json                                // { tier, roleFit, pay, transparency, sourceQuality }
+  prefsVersion     Int      @map("prefs_version")
+  evaluatorVersion String   @map("evaluator_version")
+  evaluatedAt      DateTime @default(now()) @updatedAt @map("evaluated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  job  Job  @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@id([userId, jobId])
+  @@index([userId, tier, evaluatedAt(sort: Desc)])
+  @@index([userId, score(sort: Desc)])
+  @@index([jobId])
+  @@map("job_user_evals")
+}

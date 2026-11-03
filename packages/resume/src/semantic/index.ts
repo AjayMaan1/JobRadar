@@ -1,0 +1,5 @@
+export * from './chunks.js'
+export { EmbeddingService, JobVectorIndex, hashText, toBytes, fromBytes } from './embedding.service.js'
+export type { StoredVector } from './embedding.service.js'
+export { semanticFit, semanticEvidence, calibrate, FIT_CALIBRATION, FIT_VERSION } from './fit.js'
+export type { FitResult, SemanticEvidence } from './fit.js'

@@ -1,0 +1,18 @@
+# JobRadar worker (BullMQ + Playwright/Chromium for PDF rendering). Build from the repo root:
+#   docker build -f Dockerfile.worker -t jobradar-worker .
+FROM mcr.microsoft.com/playwright:v1.48.0-noble AS base
+ENV NODE_ENV=production APP_NAME=worker LOG_FORMAT=json PNPM_HOME=/pnpm PATH=/pnpm:$PATH
+RUN corepack enable && corepack prepare pnpm@9.14.2 --activate
+WORKDIR /app
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json turbo.json tsconfig.base.json ./
+COPY apps/web/package.json apps/web/
+COPY apps/worker/package.json apps/worker/
+COPY packages/*/package.json packages/
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store pnpm install --frozen-lockfile --prod=false
+COPY . .
+RUN pnpm db:generate && mkdir -p /app/data/objects && chown -R pwuser:pwuser /app
+USER pwuser
+EXPOSE 9464
+# /healthz answers 200 only while the heartbeat loop is alive (audit NEW-05)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s CMD node -e "fetch('http://127.0.0.1:9464/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["node_modules/.bin/tsx", "apps/worker/src/index.ts"]

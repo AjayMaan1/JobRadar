@@ -1,0 +1,391 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// Company Discovery & Watchlist Engine — schema additions (draft for review)
+// Merge into packages/db/prisma/schema.prisma. Uses Postgres enums + arrays
+// (existing tables use plain strings; new tables use enums on purpose).
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum AtsType {
+  greenhouse
+  lever
+  ashby
+  workable
+  smartrecruiters
+  recruitee
+  teamtailor
+  personio
+  bamboohr
+  rippling
+  workday          // expensive: POST per tenant, capped tier
+  custom_json      // hand-written JSON adapter (e.g. big-tech careers APIs)
+  rss
+  html             // last resort, Playwright/cheerio, never faster than "cold"
+}
+
+enum AtsCostClass {
+  cheap            // GET JSON, ETag-friendly, <50KB       (greenhouse, lever, ashby, workable…)
+  medium           // GET JSON but paginated / no ETag     (smartrecruiters, recruitee, teamtailor)
+  expensive        // POST / multi-request / browser       (workday, html, some custom_json)
+}
+
+enum CompanyStatus {
+  discovered       // seen somewhere, not yet resolved to a board
+  resolving        // resolver is trying to find an ATS board
+  unresolved       // no pollable board found; retry monthly
+  probing          // board found, first qualification fetch pending
+  watched          // qualified; polled per tier
+  dormant          // fails a hard gate (no eligibility / below pay floor); re-probed weekly
+  retired          // board gone >30d or zero eligible roles >12m
+  blocked          // anti-bot / repeated 403; operator must review
+}
+
+enum PollTier {
+  hot              // eligible + pay >= floor + >=2 postings/30d
+  warm             // eligible + any activity in 90d
+  cold             // eligible, quiet
+  dormant          // weekly re-check only
+}
+
+enum BoardStatus {
+  active
+  failing          // consecutive failures, backing off
+  blocked          // challenge page / 403 pattern detected
+  gone             // 404 / empty board for >30d
+  disabled         // manual kill switch
+}
+
+enum DiscoverySource {
+  aggregator_apply_url   // apply URL on a crawled job pointed at an ATS
+  hn_who_is_hiring
+  github_list
+  yc_directory
+  himalayas_companies
+  common_crawl
+  funding_feed
+  leetcode_comp
+  reddit
+  lca_dataset
+  manual
+}
+
+enum ResolutionStatus {
+  pending
+  resolved
+  no_ats
+  rejected               // e.g. staffing agency, duplicate, not a company
+}
+
+enum PayEvidenceSource {
+  own_posting            // salary parsed from the company's own job posting
+  hn_post
+  leetcode_comp
+  lca_dataset            // US DOL H-1B LCA disclosure (proxy, not India)
+  levels_manual
+  manual
+}
+
+enum PayBandStatus {
+  unknown
+  above_floor
+  below_floor
+}
+
+enum FetchOutcome {
+  unchanged              // 304 or identical body hash
+  changed
+  error
+  rate_limited           // 429
+  blocked                // 403 / challenge page
+  timeout
+}
+
+enum CircuitState {
+  closed
+  open
+  half_open
+}
+
+enum OpportunityClass {
+  p1_global_remote   // non-IN HQ, remote, no restriction excluding India
+  p2_india_remote    // non-IN HQ, remote, location explicitly India
+  p3_ncr_hybrid      // non-IN HQ MNC, hybrid/onsite in Delhi NCR
+  none
+}
+
+enum EmploymentType {
+  full_time
+  contract
+  part_time
+  internship
+  unknown
+}
+
+// ── Canonical company ───────────────────────────────────────────────────────
+model Company {
+  id              String        @id @default(uuid())
+  name            String
+  normalizedName  String        @map("normalized_name")          // lowercase, stripped of inc/ltd/etc.
+  domain          String?       @unique                          // primary website host, used for matching
+  hqCountry       String?       @map("hq_country")               // ISO-3166 alpha-2
+  fundingStage    String?       @map("funding_stage")            // seed, series_a, …, public
+  fundingLastAt   DateTime?     @map("funding_last_at")
+  employeeRange   String?       @map("employee_range")           // "11-50", "51-200"…
+  tags            String[]      @default([])                     // yc, a16z, remote_first, ai, …
+
+  // Eligibility (for the configured user country, default IN)
+  remotePolicy            String?   @map("remote_policy")        // remote_first | remote_friendly | hybrid | onsite | unknown
+  hiresIn                 String[]  @default([]) @map("hires_in") // country codes + region tokens: IN, APAC, EMEA, WORLDWIDE
+  eligibilityConfidence   Float     @default(0) @map("eligibility_confidence")
+  eligibilityEvidence     Json?     @map("eligibility_evidence")  // [{jobId, phrase, seenAt}]
+  eligibilityLastSeenAt   DateTime? @map("eligibility_last_seen_at")
+
+  // Activity (derived from job_sightings, recomputed hourly)
+  engineeringShare  Float     @default(0) @map("engineering_share")   // 0..1
+  postingRate30d    Float     @default(0) @map("posting_rate_30d")    // new eng postings / 30d
+  activePostings    Int       @default(0) @map("active_postings")
+  lastPostingAt     DateTime? @map("last_posting_at")
+
+  // Pay band (derived from pay_evidence, INR annual)
+  payMinInr         Float?        @map("pay_min_inr")
+  payMaxInr         Float?        @map("pay_max_inr")
+  payMedianInr      Float?        @map("pay_median_inr")
+  payConfidence     Float         @default(0) @map("pay_confidence")   // 0..1, f(count, recency, source quality)
+  payEvidenceCount  Int           @default(0) @map("pay_evidence_count")
+  payLastAt         DateTime?     @map("pay_last_at")
+  payBandStatus     PayBandStatus @default(unknown) @map("pay_band_status")
+
+  // Priority-class aggregates (derived, 180d window)
+  bestClass        OpportunityClass @default(none) @map("best_class")
+  classCounts180d  Json?            @map("class_counts_180d")   // {"p1_global_remote": 3, "p2_india_remote": 1, ...}
+  offices          String[]         @default([])                // normalized cities seen in postings (drives NCR gate)
+  anchor           Boolean          @default(false)             // curated; exempt from activity-based demotion
+
+  // Lifecycle & scheduling
+  status          CompanyStatus @default(discovered)
+  statusReason    String?       @map("status_reason")
+  tier            PollTier      @default(cold)
+  tierReason      String?       @map("tier_reason")
+  tierUpdatedAt   DateTime?     @map("tier_updated_at")
+  manualTier      PollTier?     @map("manual_tier")               // operator override, wins over computed tier
+  qualityScore    Float         @default(0) @map("quality_score") // composite 0..100 for ranking/source-quality
+
+  discoveredAt      DateTime  @default(now()) @map("discovered_at")
+  discoveredVia     DiscoverySource @map("discovered_via")
+  firstQualifiedAt  DateTime? @map("first_qualified_at")
+  lastProbedAt      DateTime? @map("last_probed_at")
+  notes             String?
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  boards       CompanyBoard[]
+  discoveries  CompanyDiscovery[]
+  payEvidence  PayEvidence[]
+  jobs         Job[]
+
+  @@index([normalizedName])
+  @@index([status, tier])
+  @@index([payBandStatus])
+  @@index([hiresIn], type: Gin)
+  @@index([anchor])
+  @@index([bestClass])
+  @@map("companies")
+}
+
+// ── A pollable board (a company may have several: GH for US, Lever for EU…) ──
+model CompanyBoard {
+  id          String       @id @default(uuid())
+  companyId   String       @map("company_id")
+  atsType     AtsType      @map("ats_type")
+  slug        String                                              // "stripe", or "nvidia/NVIDIAExternalCareerSite" for workday
+  host        String                                              // rate-limit key: boards-api.greenhouse.io, nvidia.wd5.myworkdayjobs.com
+  apiUrl      String       @map("api_url")                        // fully resolved list endpoint
+  careersUrl  String?      @map("careers_url")
+  costClass   AtsCostClass @map("cost_class")
+  queryScope  Json?        @map("query_scope")                    // e.g. workday {searchText:"Gurugram"}; lever {location:"Remote"}
+
+  status               BoardStatus @default(active)
+  enabled              Boolean     @default(true)
+
+  // Scheduling (dispatcher: WHERE enabled AND status='active' AND next_poll_at <= now())
+  nextPollAt           DateTime    @default(now()) @map("next_poll_at")
+  lastPollAt           DateTime?   @map("last_poll_at")
+  lastSuccessAt        DateTime?   @map("last_success_at")
+  lastChangedAt        DateTime?   @map("last_changed_at")
+  backoffUntil         DateTime?   @map("backoff_until")
+
+  // Conditional-request state
+  etag                 String?
+  lastModified         String?     @map("last_modified")
+  bodyHash             String?     @map("body_hash")
+
+  // Health
+  consecutiveFailures  Int         @default(0) @map("consecutive_failures")
+  consecutiveUnchanged Int         @default(0) @map("consecutive_unchanged")
+  blockedCount7d       Int         @default(0) @map("blocked_count_7d")
+  lastStatusCode       Int?        @map("last_status_code")
+  lastError            String?     @map("last_error")
+  lastPostingCount     Int         @default(0) @map("last_posting_count")
+  suspectDropAt        DateTime?   @map("suspect_drop_at")        // >50% count drop guard; no closures until confirmed
+
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  company    Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  sightings  JobSighting[]
+  fetchRuns  FetchRun[]
+
+  @@unique([atsType, slug])
+  @@index([enabled, status, nextPollAt])
+  @@index([host])
+  @@map("company_boards")
+}
+
+// ── Where/when a company was seen. Feeds the resolver; dedupes discovery. ───
+model CompanyDiscovery {
+  id               String           @id @default(uuid())
+  companyId        String?          @map("company_id")             // null until resolved
+  source           DiscoverySource
+  externalRef      String           @map("external_ref")           // URL / slug / HN comment id / GitHub row
+  nameAsSeen       String?          @map("name_as_seen")
+  domainAsSeen     String?          @map("domain_as_seen")
+  careersUrlAsSeen String?          @map("careers_url_as_seen")
+  atsHint          AtsType?         @map("ats_hint")
+  slugHint         String?          @map("slug_hint")
+  payload          Json?                                           // raw snippet for audit
+  firstSeenAt      DateTime         @default(now()) @map("first_seen_at")
+  lastSeenAt       DateTime         @default(now()) @map("last_seen_at")
+  seenCount        Int              @default(1) @map("seen_count")
+  resolution       ResolutionStatus @default(pending)
+  resolvedAt       DateTime?        @map("resolved_at")
+  resolutionNote   String?          @map("resolution_note")
+
+  company Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+
+  @@unique([source, externalRef])
+  @@index([resolution, firstSeenAt])
+  @@index([companyId])
+  @@map("company_discoveries")
+}
+
+// ── Pay data points; company.pay_* is derived from these ────────────────────
+model PayEvidence {
+  id            String            @id @default(uuid())
+  companyId     String            @map("company_id")
+  source        PayEvidenceSource
+  jobId         String?           @map("job_id")
+  roleTitle     String?           @map("role_title")
+  level         String?                                            // junior/mid/senior/staff…
+  locationText  String?           @map("location_text")
+  country       String?                                            // ISO code if known
+  minAmount     Float?            @map("min_amount")
+  maxAmount     Float?            @map("max_amount")
+  currency      String?
+  period        String?                                            // year | month | hour
+  inrAnnualMin  Float?            @map("inr_annual_min")
+  inrAnnualMax  Float?            @map("inr_annual_max")
+  confidence    Float             @default(0.5)
+  observedAt    DateTime          @map("observed_at")
+  url           String?
+  rawSnippet    String?           @map("raw_snippet")
+  createdAt     DateTime          @default(now()) @map("created_at")
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, observedAt])
+  @@index([source])
+  @@map("pay_evidence")
+}
+
+// ── Per-feed sighting of a job. "New" == this row did not exist. ────────────
+// feedKey = "board:<boardId>" | "source:<sourceId>" so both ATS boards and the
+// existing aggregator Source rows share one table.
+model JobSighting {
+  id            String    @id @default(uuid())
+  feedKey       String    @map("feed_key")
+  boardId       String?   @map("board_id")
+  sourceId      String?   @map("source_id")
+  externalId    String    @map("external_id")                       // ATS job id or normalized URL
+  jobId         String?   @map("job_id")                            // canonical job after dedupe
+  payloadHash   String    @map("payload_hash")                      // hash of the list-level fields
+  firstSeenAt   DateTime  @default(now()) @map("first_seen_at")
+  lastSeenAt    DateTime  @default(now()) @map("last_seen_at")
+  missingCount  Int       @default(0) @map("missing_count")          // consecutive successful polls without this id
+  goneAt        DateTime? @map("gone_at")                           // set when missing_count >= 2
+  postedAtSrc   DateTime? @map("posted_at_src")                     // as reported by the feed
+  detailFetchedAt DateTime? @map("detail_fetched_at")
+
+  board  CompanyBoard? @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  job    Job?          @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@unique([feedKey, externalId])
+  @@index([jobId])
+  @@index([firstSeenAt])
+  @@index([boardId, goneAt])
+  @@index([goneAt])                                                  // retention: delete where gone_at < now() - 365d
+  @@map("job_sightings")
+}
+
+// ── Every outbound list fetch; drives health, metrics, and circuit breakers ─
+model FetchRun {
+  id           String       @id @default(uuid())
+  boardId      String?      @map("board_id")
+  sourceId     String?      @map("source_id")
+  host         String
+  startedAt    DateTime     @default(now()) @map("started_at")
+  durationMs   Int?         @map("duration_ms")
+  httpStatus   Int?         @map("http_status")
+  bytes        Int?
+  outcome      FetchOutcome
+  newCount     Int          @default(0) @map("new_count")
+  changedCount Int          @default(0) @map("changed_count")
+  goneCount    Int          @default(0) @map("gone_count")
+  errorClass   String?      @map("error_class")
+  errorMessage String?      @map("error_message")
+
+  board CompanyBoard? @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@index([boardId, startedAt])
+  @@index([host, startedAt])
+  @@index([outcome, startedAt])
+  @@map("fetch_runs")          // prune rows older than 30d
+}
+
+// ── Per-host politeness config. Runtime counters/token buckets live in Redis. ─
+model HostPolicy {
+  id               String       @id @default(uuid())
+  host             String       @unique                              // exact host, or "*.myworkdayjobs.com"
+  enabled          Boolean      @default(true)                       // kill switch
+  maxConcurrency   Int          @default(2) @map("max_concurrency")
+  minIntervalMs    Int          @default(1000) @map("min_interval_ms")
+  burst            Int          @default(3)
+  dailyBudget      Int          @default(20000) @map("daily_budget") // hard cap on requests/day
+  probeBudgetPerDay Int         @default(300) @map("probe_budget_per_day") // new-board first fetches/day
+  respectRobots    Boolean      @default(true) @map("respect_robots")
+  circuitState     CircuitState @default(closed) @map("circuit_state")
+  circuitOpenUntil DateTime?    @map("circuit_open_until")
+  circuitOpenedAt  DateTime?    @map("circuit_opened_at")
+  tripCount7d      Int          @default(0) @map("trip_count_7d")
+  notes            String?
+  updatedAt        DateTime     @updatedAt @map("updated_at")
+
+  @@map("host_policies")
+}
+
+// ── Additions to the existing Job model ─────────────────────────────────────
+// model Job {
+//   ...existing fields...
+//   companyId    String?   @map("company_id")
+//   firstSeenAt  DateTime  @default(now()) @map("first_seen_at")   // earliest sighting across feeds
+//   lastSeenAt   DateTime  @default(now()) @map("last_seen_at")
+//   closedAt     DateTime? @map("closed_at")
+//   livenessCheckedAt DateTime? @map("liveness_checked_at")        // aggregator-only jobs: last apply-URL check
+//   opportunityClass OpportunityClass @default(none) @map("opportunity_class")
+//   classReason  String?   @map("class_reason")                    // phrase that decided the class
+//   employmentType EmploymentType @default(unknown) @map("employment_type")
+//   baseScore    Float     @default(0) @map("base_score")          // everything except freshness
+//   updatedAt    DateTime  @updatedAt @map("updated_at")
+//   companyRef   Company?  @relation(fields: [companyId], references: [id])
+//   sightings    JobSighting[]
+//   @@index([status, firstSeenAt(sort: Desc)])
+//   @@index([opportunityClass, status, firstSeenAt(sort: Desc)])
+//   @@index([companyId])
+// }

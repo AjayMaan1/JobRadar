@@ -1,0 +1,19 @@
+node_modules/
+.env
+.env.local
+dist/
+.next/
+*.tsbuildinfo
+.turbo/
+packages/db/prisma/*.db
+packages/db/prisma/*.db-*
+
+# user data / backups / local reports (audit NEW-17)
+data/
+backups/
+reports/*.json
+reports/*.log
+reports/migration-*.log
+# generated Prisma client (run `pnpm db:generate`; CI does)
+packages/db/generated/
+.jobradar/

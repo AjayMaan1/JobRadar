@@ -1,0 +1,23 @@
+# /etc/systemd/system/jobradar.service — ONE unit for the whole system via the launcher
+# (supersedes jobradar-web.service + jobradar-worker.service; keep jobradar-backup.* for backups).
+# Generate a copy with the right paths/user:  ./jobradar systemd | sudo tee /etc/systemd/system/jobradar.service
+[Unit]
+Description=JobRadar (web + worker + managed Ollama) via ./jobradar up
+After=network-online.target docker.service postgresql.service redis-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jobradar
+WorkingDirectory=/opt/jobradar
+Environment=NODE_ENV=production LOG_FORMAT=json
+ExecStart=/usr/bin/node /opt/jobradar/tools/launcher/cli.mjs up --prod --mode native --yes --skip-chromium
+ExecStop=/usr/bin/node /opt/jobradar/tools/launcher/cli.mjs down --keep-infra
+Restart=always
+RestartSec=10
+KillMode=mixed
+TimeoutStopSec=45
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

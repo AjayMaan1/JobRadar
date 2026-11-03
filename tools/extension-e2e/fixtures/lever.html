@@ -1,0 +1,18 @@
+<!doctype html><html><head><title>Acme — Platform Engineer</title></head><body>
+<div class="application-form"><form class="lever-form" action="/submitted" method="post">
+  <ul class="application-questions">
+    <li class="application-question"><label class="application-label">Full name<span class="required">✱</span></label><input type="text" name="name"></li>
+    <li class="application-question"><label class="application-label">Email<span class="required">✱</span></label><input type="text" name="email"></li>
+    <li class="application-question"><label class="application-label">Phone</label><input type="text" name="phone"></li>
+    <li class="application-question"><label class="application-label">Current company</label><input type="text" name="org"></li>
+    <li class="application-question"><label class="application-label">Resume/CV<span class="required">✱</span></label><input type="file" name="resume" id="resume-upload-input" accept="application/pdf"></li>
+    <li class="application-question"><label class="application-label">LinkedIn URL</label><input type="text" name="urls[LinkedIn]"></li>
+    <li class="application-question"><label class="application-label">GitHub URL</label><input type="text" name="urls[GitHub]"></li>
+    <li class="application-question"><label class="application-label">Portfolio URL</label><input type="text" name="urls[Portfolio]"></li>
+    <li class="application-question"><label class="application-label">Additional information</label><textarea name="comments"></textarea></li>
+    <li class="application-question"><label class="application-label">Why do you want to work at Acme?</label><textarea name="cards[abc][field0]"></textarea></li>
+  </ul>
+  <button type="submit" class="postings-btn">Submit application</button>
+</form></div>
+<script>window.__submits = 0; document.querySelector('form').addEventListener('submit', (e) => { e.preventDefault(); window.__submits++ })</script>
+</body></html>

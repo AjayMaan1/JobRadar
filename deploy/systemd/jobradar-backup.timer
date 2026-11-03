@@ -1,0 +1,10 @@
+# /etc/systemd/system/jobradar-backup.timer (+ .service) — alternative to the cron file
+[Unit]
+Description=Nightly JobRadar backup
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

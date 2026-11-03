@@ -1,0 +1,3 @@
+# /etc/cron.d/jobradar-backup — nightly 03:00 backup + Sunday restore drill (audit NEW-02)
+0 3 * * * jobradar cd /opt/jobradar && BACKUP_DIR=/var/backups/jobradar tools/backup/backup.sh >> /var/log/jobradar/backup.log 2>&1
+30 4 * * 0 jobradar cd /opt/jobradar && BACKUP_DIR=/var/backups/jobradar tools/backup/verify.sh >> /var/log/jobradar/backup.log 2>&1

@@ -1,0 +1,6 @@
+export * from './types.js'
+export { applyProposal, getPointer, setPointer } from './apply.js'
+export { deterministicProposals } from './deterministic.js'
+export { llmProposals, llmBulletFromFact } from './llm.js'
+export { headlineVariants, HEADLINE_MAX, ABOUT_MAX_CHARS } from './headline.js'
+export type { Tone } from './headline.js'

@@ -1,0 +1,26 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "baseUrl": "../..",
+    "paths": {
+      "zod": ["tools/testkit/shims/zod/index.ts"],
+      "zod-to-json-schema": ["tools/testkit/shims/zod-to-json-schema/index.ts"],
+      "@jobradar/resume/client": ["packages/resume/src/client.ts"],
+      "@jobradar/*": ["packages/*/src/index.ts"]
+    },
+    "types": ["node"],
+    "typeRoots": ["../../node_modules/@types"],
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "incremental": false,
+    "noUnusedLocals": false,
+    "noImplicitAny": false
+  },
+  "files": ["ambient.d.ts"],
+  "include": ["../../packages/*/src/**/*.ts", "../../apps/worker/src/**/*.ts", "../../apps/web/**/*.ts", "../../apps/web/**/*.tsx", "../../tools/scripts/*.ts", "../../tools/e2e/*.ts"],
+  "exclude": ["../../**/node_modules", "../../packages/db/generated", "../../**/*.test.ts", "../../apps/web/.next"]
+}

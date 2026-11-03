@@ -1,0 +1,10 @@
+[Unit]
+Description=JobRadar restore drill
+
+[Service]
+Type=oneshot
+User=jobradar
+WorkingDirectory=/opt/jobradar
+EnvironmentFile=/opt/jobradar/.env
+Environment=BACKUP_DIR=/var/backups/jobradar
+ExecStart=/opt/jobradar/tools/backup/verify.sh

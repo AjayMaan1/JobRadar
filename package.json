@@ -1,0 +1,53 @@
+{
+  "name": "jobradar",
+  "private": true,
+  "packageManager": "pnpm@9.14.2",
+  "scripts": {
+    "start": "node tools/launcher/cli.mjs up",
+    "up": "node tools/launcher/cli.mjs up",
+    "down": "node tools/launcher/cli.mjs down",
+    "doctor": "node tools/launcher/cli.mjs doctor",
+    "ai:setup": "node tools/launcher/cli.mjs ai setup",
+    "ai:test": "node tools/launcher/cli.mjs ai test",
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "worker:dev": "tsx watch apps/worker/src/index.ts",
+    "web:dev": "pnpm --filter @jobradar/web dev",
+    "crawl": "tsx apps/worker/src/direct-crawl.ts",
+    "health:adapters": "tsx packages/crawler/src/scripts/health-check.ts",
+    "db:migrate": "prisma migrate dev --schema=packages/db/prisma/schema.prisma",
+    "db:seed": "tsx packages/db/prisma/seed.ts",
+    "db:generate": "prisma generate --schema=packages/db/prisma/schema.prisma",
+    "db:studio": "prisma studio --schema=packages/db/prisma/schema.prisma",
+    "test": "vitest run",
+    "test:integration": "vitest run packages/resume/src/services",
+    "user:create": "tsx tools/scripts/create-user.ts",
+    "verify:e2e": "tsx tools/e2e/apply-flow.ts",
+    "verify:local": "tools/e2e/run-local.sh",
+    "typecheck": "turbo run typecheck",
+    "crawl:resolve": "tsx apps/worker/src/direct-crawl.ts resolve",
+    "crawl:boards": "tsx apps/worker/src/direct-crawl.ts boards",
+    "db:migrate:deploy": "prisma migrate deploy --schema=packages/db/prisma/schema.prisma",
+    "test:e2e:sandbox": "vitest run -c vitest.sandbox.config.ts",
+    "test:sandbox:offline": "tools/sandbox-e2e/run-all.sh",
+    "typecheck:offline": "tools/typecheck-offline/run.sh",
+    "backup": "tools/backup/backup.sh",
+    "backup:restore": "tools/backup/restore.sh",
+    "backup:verify": "tools/backup/verify.sh",
+    "ext:e2e": "node tools/extension-e2e/run.mjs",
+    "ext:zip": "cd apps/extension && zip -r ../../dist/jobradar-extension.zip . -x '*.DS_Store'",
+    "docker:build": "docker build -f Dockerfile.web -t jobradar-web . && docker build -f Dockerfile.worker -t jobradar-worker ."
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "dotenv": "^16.4.0",
+    "prisma": "^5.22.0",
+    "tsx": "^4.19.0",
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.0"
+  },
+  "dependencies": {
+    "@prisma/client": "^5.22.0"
+  }
+}

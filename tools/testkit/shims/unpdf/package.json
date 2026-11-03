@@ -1,0 +1,1 @@
+{ "name": "unpdf", "version": "0.0.0-sandbox", "main": "./index.ts", "types": "./index.ts" }

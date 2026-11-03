@@ -1,0 +1,44 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>JobRadar</title>
+<style>
+  body { width: 360px; margin: 0; font: 13px system-ui, sans-serif; color: #111827; }
+  header { padding: 10px 12px; background: #111827; color: #fff; font-weight: 600; display: flex; justify-content: space-between; align-items: center; }
+  header a { color: #9ca3af; font-weight: 400; font-size: 11px; text-decoration: none; }
+  main { padding: 10px 12px; }
+  .job { font-weight: 600; } .muted { color: #6b7280; font-size: 12px; }
+  button { font: inherit; border-radius: 6px; padding: 6px 10px; cursor: pointer; border: 1px solid #d1d5db; background: #fff; }
+  button.primary { background: #111827; color: #fff; border-color: #111827; }
+  button.ok { background: #059669; color: #fff; border-color: #059669; }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 6px; margin-top: 8px; align-items: center; flex-wrap: wrap; }
+  .report { margin-top: 8px; font-size: 12px; } .report li { margin: 2px 0; } .skip { color: #b45309; }
+  .answers { margin-top: 8px; } .answer { border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px; margin-top: 6px; font-size: 12px; }
+  .answer .q { font-weight: 600; } .answer .a { white-space: pre-wrap; margin-top: 3px; max-height: 80px; overflow: auto; }
+  .answer button { font-size: 11px; padding: 2px 6px; margin-top: 4px; }
+  .err { color: #b91c1c; font-size: 12px; margin-top: 6px; }
+  .pill { display: inline-block; padding: 1px 6px; border-radius: 999px; background: #ecfdf5; color: #047857; font-size: 11px; }
+</style></head>
+<body>
+<header>JobRadar Autofill <a href="#" id="options">options</a></header>
+<main>
+  <div id="status" class="muted">Loading…</div>
+  <div id="job" hidden>
+    <div class="job" id="job-title"></div>
+    <div class="muted" id="job-meta"></div>
+  </div>
+  <div class="row">
+    <button class="primary" id="fill" disabled>Fill this form</button>
+    <label class="muted"><input type="checkbox" id="onlyEmpty" checked> only empty fields</label>
+    <label class="muted"><input type="checkbox" id="attach" checked> attach resume</label>
+  </div>
+  <div id="report" class="report"></div>
+  <div id="answers" class="answers"></div>
+  <div class="row">
+    <button class="ok" id="applied" disabled>✓ I submitted — mark applied</button>
+    <label class="muted">remind in <select id="followup"><option value="0">never</option><option value="7" selected>7 d</option><option value="14">14 d</option></select></label>
+  </div>
+  <div id="error" class="err"></div>
+  <p class="muted" style="margin-top:10px">The extension never submits anything. Review every field on the employer's page, then click their Submit.</p>
+</main>
+<script src="src/popup.js"></script>
+</body></html>

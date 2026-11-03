@@ -1,0 +1,13 @@
+<!doctype html><html><head><title>Acme — Data Engineer</title></head><body>
+<div class="ashby-application-form-container"><form class="ashby-application-form" action="/submitted" method="post">
+  <div class="ashby-application-form-field-entry"><label for="_systemfield_name">Name</label><input id="_systemfield_name" name="_systemfield_name" type="text"></div>
+  <div class="ashby-application-form-field-entry"><label for="_systemfield_email">Email</label><input id="_systemfield_email" name="_systemfield_email" type="email"></div>
+  <div class="ashby-application-form-field-entry"><label for="_systemfield_phone">Phone</label><input id="_systemfield_phone" name="_systemfield_phone" type="tel"></div>
+  <div class="ashby-application-form-field-entry"><label for="_systemfield_resume">Resume</label><input id="_systemfield_resume" name="_systemfield_resume" type="file"></div>
+  <div class="ashby-application-form-field-entry"><label for="f1">LinkedIn Profile</label><input id="f1" type="text"></div>
+  <div class="ashby-application-form-field-entry"><label for="f2">Expected salary (INR, annual)</label><input id="f2" type="text"></div>
+  <div class="ashby-application-form-field-entry"><label for="f3">Why do you want to work at Acme?</label><textarea id="f3"></textarea></div>
+  <button type="submit">Submit Application</button>
+</form></div>
+<script>window.__submits = 0; document.querySelector('form').addEventListener('submit', (e) => { e.preventDefault(); window.__submits++ })</script>
+</body></html>

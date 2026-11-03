@@ -1,0 +1,138 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: jobradar
+      POSTGRES_PASSWORD: jobradar
+      POSTGRES_DB: jobradar
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobradar"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Optional: S3-compatible object store for STORAGE_DRIVER=s3 (resumes, rendered versions).
+  # Console: http://localhost:9001 (minioadmin / minioadmin). Create the bucket named in S3_BUCKET.
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    profiles: ["s3"]
+
+  # Local AI (profile "ai"): docker compose --profile ai up -d. On a laptop the native install is preferred — it
+  # uses the CPU/GPU directly and is easier to keep warm. `ollama-init` pulls the configured models once.
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    environment:
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "2"
+      OLLAMA_KEEP_ALIVE: "30m"
+    volumes:
+      - ollama_data:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+    profiles: ["ai"]
+
+  # Pulls LLM_MODEL + EMBEDDING_MODEL (from .env; defaults below) into the ollama volume, then exits 0.
+  # Idempotent: re-running is a no-op when the layers exist. The app tolerates a missing model (AI calls fail
+  # with a clear message until the pull finishes; deterministic features keep working).
+  ollama-init:
+    image: ollama/ollama:latest
+    env_file: .env
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["/bin/sh", "-c"]
+    command: ["ollama pull \"${LLM_MODEL:-qwen2.5:3b-instruct}\" && ollama pull \"${EMBEDDING_MODEL:-nomic-embed-text}\""]
+    volumes:
+      - ollama_data:/root/.ollama
+    depends_on:
+      ollama: { condition: service_healthy }
+    restart: "no"
+    profiles: ["ai"]
+
+  # ── Application (default profile): `docker compose up -d` brings up postgres, redis, web, worker, backup.
+  # Add `--profile ai` for a containerised Ollama with automatic model pulls. `./jobradar up --mode docker` does
+  # both plus .env provisioning and the health wait (docs/HLD-unified-launcher.md §3.5).
+  # Runs `prisma migrate deploy` before the web server starts; the worker waits for the web migration.
+  web:
+    build: { context: ., dockerfile: Dockerfile.web }
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://jobradar:jobradar@postgres:5432/jobradar
+      REDIS_URL: redis://redis:6379
+      OLLAMA_BASE_URL: http://ollama:11434
+      TRUSTED_PROXY: "1"
+    command: sh -c "node node_modules/prisma/build/index.js migrate deploy --schema=packages/db/prisma/schema.prisma && node apps/web/server.js"
+    ports: ["3000:3000"]
+    volumes: ["objects_data:/app/data/objects"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    restart: unless-stopped
+
+  worker:
+    build: { context: ., dockerfile: Dockerfile.worker }
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://jobradar:jobradar@postgres:5432/jobradar
+      REDIS_URL: redis://redis:6379
+      OLLAMA_BASE_URL: http://ollama:11434
+      WORKER_METRICS_HOST: 0.0.0.0
+    volumes: ["objects_data:/app/data/objects"]
+    ports: ["127.0.0.1:9464:9464"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      web: { condition: service_started }
+    restart: unless-stopped
+
+  # Nightly backups: pg_dump + objects tarball → ./backups (mount an off-box path in production)
+  backup:
+    image: postgres:16-alpine
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://jobradar:jobradar@postgres:5432/jobradar
+      STORAGE_LOCAL_ROOT: /app/data/objects
+      BACKUP_DIR: /backups
+    volumes: ["objects_data:/app/data/objects:ro", "./backups:/backups", "./tools/backup:/app/tools/backup:ro", "./packages/db/prisma/migrations:/app/packages/db/prisma/migrations:ro"]
+    working_dir: /app
+    entrypoint: sh -c "apk add --no-cache bash openssl >/dev/null && echo '0 3 * * * cd /app && bash tools/backup/backup.sh' | crontab - && crond -f -l 2"
+    depends_on:
+      postgres: { condition: service_healthy }
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  ollama_data:
+  objects_data:
